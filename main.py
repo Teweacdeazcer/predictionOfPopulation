@@ -96,17 +96,15 @@ model = models.Sequential([
 ])
 model.compile(optimizer='adam', loss='mse')
 
-
-
 early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
 history = model.fit(
     X_train, y_train,
     epochs=30,
     batch_size=1,
-    validation_split=0.1
+    validation_split=0.1,
+    callbacks=[early_stop]
 )
-
 
 # 마지막 24시간 입력
 male_input_28 = male_data[-TIME_WINDOW:]     # (24, 72, 49)
@@ -141,7 +139,6 @@ current_input = np.concatenate([spatial_input, time_day_map], axis=-1)
 # 28일 24시간 예측 (4시간씩 6번)
 next_hour = final_hours[-1]
 next_day = final_days[-1]
-
 
 y_pred = model.predict(X_test)
 mse = np.mean((y_test - y_pred) ** 2)
@@ -257,7 +254,6 @@ plt.title("Mean absolute error(MAE)")
 plt.colorbar()
 plt.tight_layout()
 plt.show()
-
 
 y_test_flat = y_test.reshape(-1)
 y_pred_flat = y_pred.reshape(-1)
