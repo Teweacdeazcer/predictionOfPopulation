@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import random, numpy as np, tensorflow as tf
 from tensorflow.keras import layers, models
+from tensorflow.keras.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error, r2_score
@@ -95,7 +96,16 @@ model = models.Sequential([
 ])
 model.compile(optimizer='adam', loss='mse')
 
-model.fit(X_train, y_train, epochs=10, batch_size=1, validation_split=0.1)
+
+
+early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+history = model.fit(
+    X_train, y_train,
+    epochs=30,
+    batch_size=1,
+    validation_split=0.1
+)
 
 
 # 마지막 24시간 입력
@@ -139,7 +149,7 @@ print(f"\nMean Squared Error(MSE): {mse:.6f}")
 mae = np.mean(np.abs(y_test - y_pred))
 print(f"Mean absolute error(MAE): {mae:.6f}")
 
-# boundary.csv 불러오기
+# boundary.csv 불러오기(마스크)
 boundary_mask = pd.read_csv('./predictionOfPopulation/miniData/boundary.csv', header=None).values  # (72, 49)
 
 # Tensor로 변환 및 broadcast
@@ -212,13 +222,13 @@ for set_idx in range(6):  # 6세트 (0~3시, 4~7시, ...)
     for i in range(4):
         hour_idx = set_idx * 4 + i
 
-        # ① 원본 예측
+        # 1. 원본데이터 예측
         ax_raw = axes[0, i]
         ax_raw.imshow(predictions[hour_idx], cmap='RdYlGn_r', vmin=0, vmax=1)
         ax_raw.set_title(f"[Raw] 02-28 {hour_idx:02d}:00")
         ax_raw.axis('off')
 
-        # ② 마스크 적용 예측
+        # 2. 마스크 적용 예측
         ax_masked = axes[1, i]
         masked_pred = predictions[hour_idx] * boundary_mask
         ax_masked.imshow(masked_pred, cmap='RdYlGn_r', vmin=0, vmax=1)
@@ -228,7 +238,18 @@ for set_idx in range(6):  # 6세트 (0~3시, 4~7시, ...)
     plt.tight_layout()
     plt.show()
 
+# 학습 그래프
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss (MSE)')
+plt.title('Training & Validation Loss over Epochs')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
+# 모델 성능 평가지표
 avg_abs_error_map = np.mean(np.abs(y_test - y_pred), axis=(0, 1))
 plt.figure(figsize=(6, 4))
 plt.imshow(avg_abs_error_map, cmap='RdYlGn_r', vmin=0, vmax=1)
@@ -262,4 +283,4 @@ plt.imshow(avg_masked_error, cmap='RdYlGn_r', vmin=0, vmax=1)
 plt.title("Masked Mean Absolute Error Map")
 plt.colorbar()
 plt.tight_layout()
-plt.show() 
+plt.show()
