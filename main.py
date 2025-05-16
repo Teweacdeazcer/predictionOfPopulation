@@ -1,11 +1,15 @@
 import os
-import numpy as np
 import pandas as pd
-import tensorflow as tf
+import random, numpy as np, tensorflow as tf
 from tensorflow.keras import layers, models
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error, r2_score
 
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
 H, W = 72, 49  
 TIME_WINDOW = 24
@@ -40,7 +44,7 @@ def multi_hot_time_day(hour, day):
 
 
 # Load
-data_dir = './miniData'
+data_dir = './predictionOfPopulation/miniData'
 
 # input/output
 male_data, female_data, days, hours = load_heatmap_data(data_dir)
@@ -91,9 +95,6 @@ model = models.Sequential([
 ])
 model.compile(optimizer='adam', loss='mse')
 
-model.summary()
-
-
 model.fit(X_train, y_train, epochs=10, batch_size=1, validation_split=0.1)
 
 
@@ -130,6 +131,36 @@ current_input = np.concatenate([spatial_input, time_day_map], axis=-1)
 # 28일 24시간 예측 (4시간씩 6번)
 next_hour = final_hours[-1]
 next_day = final_days[-1]
+
+
+y_pred = model.predict(X_test)
+mse = np.mean((y_test - y_pred) ** 2)
+print(f"\nMean Squared Error(MSE): {mse:.6f}")
+mae = np.mean(np.abs(y_test - y_pred))
+print(f"Mean absolute error(MAE): {mae:.6f}")
+
+# boundary.csv 불러오기
+boundary_mask = pd.read_csv('./predictionOfPopulation/miniData/boundary.csv', header=None).values  # (72, 49)
+
+# Tensor로 변환 및 broadcast
+boundary_mask_tensor = tf.convert_to_tensor(boundary_mask, dtype=tf.float32)  # (72, 49)
+boundary_mask_tensor = tf.expand_dims(boundary_mask_tensor, axis=0)  # (1, 72, 49)
+boundary_mask_tensor = tf.expand_dims(boundary_mask_tensor, axis=0) # (1, 1, 72, 49)
+boundary_mask_tensor = tf.broadcast_to(boundary_mask_tensor, y_test.shape)    # (N, 4, 72, 49)
+
+masked_y_test = y_test * boundary_mask_tensor
+masked_y_pred = y_pred * boundary_mask_tensor
+
+masked_y_test_flat = masked_y_test.numpy().flatten()
+masked_y_pred_flat = masked_y_pred.numpy().flatten()
+
+
+EPSILON = 1e-6
+safe_divisor = np.where(np.abs(masked_y_test_flat) < EPSILON, EPSILON, masked_y_test_flat)
+mape_masked = np.mean(np.abs((masked_y_test_flat - masked_y_pred_flat) / safe_divisor))
+
+rmse_masked = np.sqrt(mean_squared_error(masked_y_test_flat, masked_y_pred_flat))
+r2_masked = r2_score(masked_y_test_flat, masked_y_pred_flat)
 
 for _ in range(6):
     pred_4h = model.predict(current_input[np.newaxis, ...])[0]  # (4, 72, 49)
@@ -176,14 +207,59 @@ for _ in range(6):
     current_input = np.concatenate([new_spatial, time_day_map], axis=-1)  # (72, 49, 792)
 
 for set_idx in range(6):  # 6세트 (0~3시, 4~7시, ...)
-    fig, axes = plt.subplots(1, 4, figsize=(20, 5))  # 가로 4개짜리 subplot
-    
+    fig, axes = plt.subplots(2, 4, figsize=(20, 8))  # 위: 원본 / 아래: 마스크 적용
+
     for i in range(4):
         hour_idx = set_idx * 4 + i
-        ax = axes[i]
-        ax.imshow(predictions[hour_idx], cmap='RdYlGn_r', vmin=0, vmax=1)
-        ax.set_title(f'Predicted 02-28 {hour_idx:02d}:00')
-        ax.axis('off')
+
+        # ① 원본 예측
+        ax_raw = axes[0, i]
+        ax_raw.imshow(predictions[hour_idx], cmap='RdYlGn_r', vmin=0, vmax=1)
+        ax_raw.set_title(f"[Raw] 02-28 {hour_idx:02d}:00")
+        ax_raw.axis('off')
+
+        # ② 마스크 적용 예측
+        ax_masked = axes[1, i]
+        masked_pred = predictions[hour_idx] * boundary_mask
+        ax_masked.imshow(masked_pred, cmap='RdYlGn_r', vmin=0, vmax=1)
+        ax_masked.set_title(f"[Masked] 02-28 {hour_idx:02d}:00")
+        ax_masked.axis('off')
     
     plt.tight_layout()
     plt.show()
+
+
+avg_abs_error_map = np.mean(np.abs(y_test - y_pred), axis=(0, 1))
+plt.figure(figsize=(6, 4))
+plt.imshow(avg_abs_error_map, cmap='RdYlGn_r', vmin=0, vmax=1)
+plt.title("Mean absolute error(MAE)")
+plt.colorbar()
+plt.tight_layout()
+plt.show()
+
+
+y_test_flat = y_test.reshape(-1)
+y_pred_flat = y_pred.reshape(-1)
+
+rmse = np.sqrt(mean_squared_error(y_test_flat, y_pred_flat))
+r2 = r2_score(y_test_flat, y_pred_flat)
+mape = mean_absolute_percentage_error(y_test_flat, y_pred_flat)
+
+print(f"RMSE (Root Mean Squared Error):             {rmse:.6f}")
+print(f"R² Score (coefficient of determination):   {r2:.6f}")
+print(f"MAPE (Mean Absolute % Error):   {mape * 100:.2f}%")
+
+print("\n[Boundary Masked 평가 지표]")
+print(f"MAPE (Masked): {mape_masked * 100:.2f}%")
+print(f"RMSE (Masked): {rmse_masked:.6f}")
+print(f"R²   (Masked): {r2_masked:.6f}")
+
+masked_abs_error = np.abs(masked_y_test - masked_y_pred)  # (N, 4, 72, 49)
+avg_masked_error = np.mean(masked_abs_error, axis=(0, 1))  # (72, 49)
+
+plt.figure(figsize=(6, 4))
+plt.imshow(avg_masked_error, cmap='RdYlGn_r', vmin=0, vmax=1)
+plt.title("Masked Mean Absolute Error Map")
+plt.colorbar()
+plt.tight_layout()
+plt.show() 
